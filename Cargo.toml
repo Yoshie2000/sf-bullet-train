@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#bullet = { git = "https://github.com/jw1912/bullet", package = "bullet_lib", default-features = false, features = ["cpu"] }
-bullet = { git = "https://github.com/jw1912/bullet", package = "bullet_lib", rev = "4df194aaaec8c3aea92c9936a4a6c9c38f4966a3" }
+#bullet = { git = "https://github.com/jw1912/bullet", package = "bullet_lib", default-features = false, features = ["cuda"] }
+bullet = { git = "https://github.com/jw1912/bullet", package = "bullet_lib", rev = "e37db79ee3ee54be2a2f310004b1b82f3b60c0ca", default-features = false, features = ["cuda"] }
 bulletformat = "1.7.0"
 sfbinpack = { package = "binpack", git = "https://github.com/Disservin/binpack-rust", rev = "483e9aac028b4c3e0671af6b28ff50f64d696558"}
 
