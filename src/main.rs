@@ -1,22 +1,17 @@
 use crate::outputs::OutputBuckets;
 use bullet::{
-    nn::{
-        optimiser::{RangerOptimiser, RangerParams},
-        Activation, ExecutionContext, Graph, InitSettings, NetworkBuilder, Node, Shape,
-    },
-    trainer::{
+    NetworkTrainer, default::inputs::{Chess768, Factorised, SparseInputType}, nn::{
+        Activation, ExecutionContext, Graph, InitSettings, NetworkBuilder, Node, Shape, optimiser::{RangerOptimiser, RangerParams}
+    }, trainer::{
         default::{
-            formats::sfbinpack::{
-                chess::{piecetype::PieceType, r#move::MoveType},
-                TrainingDataEntry,
-            },
-            inputs, loader, outputs, Trainer,
+            Trainer, formats::sfbinpack::{
+                TrainingDataEntry, chess::{r#move::MoveType, piecetype::PieceType}
+            }, inputs, loader, outputs
         },
         save::{Layout, QuantTarget, SavedFormat},
-        schedule::{lr, wdl, TrainingSchedule, TrainingSteps},
+        schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
         settings::LocalSettings,
-    },
-    NetworkTrainer,
+    }
 };
 use bulletformat::ChessBoard;
 
@@ -31,23 +26,78 @@ impl OutputBuckets<ChessBoard> for SfMaterialCount {
     }
 }
 
-type InputFeatures = inputs::ChessBucketsMergedKingsMirroredFactorised;
+#[derive(Clone, Copy, Default)]
+pub struct SfInputs;
+impl SfInputs {
+    #[rustfmt::skip]
+    const BUCKETS: [usize; 64] = [
+        28, 29, 30, 31, 31, 30, 29, 28,
+        24, 25, 26, 27, 27, 26, 25, 24,
+        20, 21, 22, 23, 23, 22, 21, 20,
+        16, 17, 18, 19, 19, 18, 17, 16,
+        12, 13, 14, 15, 15, 14, 13, 12,
+        08, 09, 10, 11, 11, 10, 09, 08,
+        04, 05, 06, 07, 07, 06, 05, 04,
+        00, 01, 02, 03, 03, 02, 01, 00,
+    ];
+}
+
+impl SparseInputType for SfInputs {
+    type RequiredDataType = ChessBoard;
+
+    fn description(&self) -> String {
+        ""
+    }
+
+    fn is_factorised(&self) -> bool {
+        false
+    }
+
+    fn map_features<F: FnMut(usize, usize)>(&self, pos: &Self::RequiredDataType, mut f: F) {
+        
+        let make_index = |perspective, sq, pc, ksq| -> usize {
+            let flip = 56 * perspective;
+            let orientation = if ksq % 8 > 3 { 0 } else { 7 };
+            let color = usize::from(piece & 8 > 0);
+            let pctype = usize::from(pc & 7);
+            let sf_pc = 2 * pctype + (1 - color).max(if pctype == 5 { 0 } else { 1 });
+            assert!(pctype <= 5);
+            assert!(sf_pc <= 11);
+            return (sq ^ flip ^ orientation) + 64 * sf_pc + 64 * 11 * SfInputs::BUCKETS[ksq ^ flip];
+        };
+
+        for (piece, square) in pos.into_iter() {
+            let stm = make_index(0, square, piece, pos.our_ksq());
+            let ntm = make_index(1, square, piece, pos.opp_ksq());
+            f(stm, ntm);
+        }
+    }
+
+    fn max_active(&self) -> usize {
+        32
+    }
+
+    fn merge_factoriser(&self, unmerged: Vec<f32>) -> Vec<f32> {
+        
+    }
+
+    fn num_inputs(&self) -> usize {
+        704 * 32
+    }
+
+    fn shorthand(&self) -> String {
+        ""
+    }
+
+}
+
+type InputFeatures = Factorised<SfInputs, Chess768>;
 const L1: usize = 3072;
 const L2: usize = 15;
 const L3: usize = 32;
 
 fn main() {
-    #[rustfmt::skip]
-    let inputs = InputFeatures::new([
-        0, 1, 2, 3,
-        4, 5, 6, 7,
-        8, 9, 10, 11,
-        12, 13, 14, 15,
-        16, 17, 18, 19,
-        20, 21, 22, 23,
-        24, 25, 26, 27,
-        28, 29, 30, 31,
-    ]);
+    let inputs = InputFeatures::default();
 
     let output_buckets = SfMaterialCount::default();
     let num_inputs = <InputFeatures as inputs::SparseInputType>::num_inputs(&inputs);
