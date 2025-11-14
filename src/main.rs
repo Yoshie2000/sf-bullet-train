@@ -115,14 +115,14 @@ fn main() {
         SavedFormat::id("l0b").round().quantise::<i16>(255),
         SavedFormat::id("l0w").round().quantise::<i16>(255),
         SavedFormat::id("pst").round().quantise::<i32>(255),
-        SavedFormat::id("l1b").round().quantise::<i32>(64 * 255).transform(|store, weights| {
+        SavedFormat::id("l1b").round().quantise::<i32>(64 * 255),/*.transform(|store, weights| {
             let fact = store.get("l1_factb").values.repeat(NUM_OUTPUT_BUCKETS);
             weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
-        }),
-        SavedFormat::id("l1w").round().quantise::<i8>(64).transpose().transform(|store, weights| {
+        }),*/
+        SavedFormat::id("l1w").round().quantise::<i8>(64).transpose(),/*.transform(|store, weights| {
             let fact = store.get("l1_factw").values.repeat(NUM_OUTPUT_BUCKETS);
             weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
-        }),
+        }),*/
         SavedFormat::id("l2b").round().quantise::<i32>(64 * 127),
         SavedFormat::id("l2w").round().quantise::<i8>(64).transpose(),
         SavedFormat::id("l3b").round().quantise::<i32>(16 * 600),
@@ -140,7 +140,7 @@ fn main() {
             // trainable weights
             let l0 = builder.new_affine("l0", num_inputs, L1);
             let l1 = builder.new_affine("l1", L1, NUM_OUTPUT_BUCKETS * (L2 + 1));
-            let l1_fact = builder.new_affine("l1_fact", L1, L2 + 1);
+            // let l1_fact = builder.new_affine("l1_fact", L1, L2 + 1);
             let l2 = builder.new_affine("l2", L2 * 2, NUM_OUTPUT_BUCKETS * L3);
             let l3 = builder.new_affine("l3", L3, NUM_OUTPUT_BUCKETS);
             let pst = builder.new_weights(
@@ -154,15 +154,15 @@ fn main() {
             let ntm_subnet = l0.forward(ntm).crelu().pairwise_mul();
             let mut out = stm_subnet.concat(ntm_subnet);
 
-            out = l1.forward(out).select(buckets) + l1_fact.forward(out);
+            out = l1.forward(out).select(buckets);// + l1_fact.forward(out);
 
             let skip_neuron = out.slice_rows(15, 16);
             out = out.slice_rows(0, 15);
 
-            out = out.concat(out.abs_pow(2.0));
+            out = out.abs_pow(2.0).concat(out);
             out = out.crelu();
 
-            out = l2.forward(out).select(buckets).screlu();
+            out = l2.forward(out).select(buckets).crelu();
             out = l3.forward(out).select(buckets);
 
             let stm_pst = pst.matmul(stm).select(buckets);
