@@ -112,10 +112,10 @@ fn main() {
     const NUM_OUTPUT_BUCKETS: usize = <SfMaterialCount as outputs::OutputBuckets<_>>::BUCKETS;
 
     let saved_format = vec![
-        SavedFormat::id("l0b").round().quantise::<i16>(255),
-        SavedFormat::id("l0w").round().quantise::<i16>(255),
-        SavedFormat::id("pst").round().quantise::<i32>(255),
-        SavedFormat::id("l1b").round().quantise::<i32>(64 * 255),/*.transform(|store, weights| {
+        SavedFormat::id("l0b").round().quantise::<i16>(127),
+        SavedFormat::id("l0w").round().quantise::<i16>(127),
+        SavedFormat::id("pst").round().quantise::<i32>(127),
+        SavedFormat::id("l1b").round().quantise::<i32>(64 * 127),/*.transform(|store, weights| {
             let fact = store.get("l1_factb").values.repeat(NUM_OUTPUT_BUCKETS);
             weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
         }),*/
