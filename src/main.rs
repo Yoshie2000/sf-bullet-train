@@ -1,6 +1,6 @@
 use bullet::{
     game::{formats::sfbinpack::{TrainingDataEntry, chess::{r#move::MoveType, piecetype::PieceType}}, inputs::{self, Chess768, Factorised, Factorises, SparseInputType}, outputs::{self, OutputBuckets}}, nn::{
-        InitSettings, Shape, optimiser::{Ranger}
+        InitSettings, Shape, optimiser::Ranger
     }, trainer::{
         save::SavedFormat,
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
@@ -54,9 +54,9 @@ impl SparseInputType for SfInputs {
             let orientation = if ksq % 8 > 3 { 0 } else { 7 };
             let color = usize::from(pc & 8 > 0);
             let pctype = usize::from(pc & 7);
-            let sf_pc = 2 * pctype + (1 - color);
+            let sf_pc: usize = 2 * pctype + color ^ perspective;
             let sf_pc = sf_pc.min(10); // no king feature on index 11
-            return (sq ^ flip ^ orientation) + 64 * sf_pc + 64 * 11 * SfInputs::BUCKETS[ksq ^ flip];
+            return (sq ^ flip ^ orientation) + 64 * sf_pc + 64 * 11 * SfInputs::BUCKETS[ksq];
         };
 
         for (piece, square) in pos.into_iter() {
