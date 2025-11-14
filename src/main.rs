@@ -150,11 +150,10 @@ fn main() {
             );
 
             // inference
-            let stm_subnet = l0.forward(stm).crelu();
-            let ntm_subnet = l0.forward(ntm).crelu();
+            let stm_subnet = l0.forward(stm).crelu().pairwise_mul();
+            let ntm_subnet = l0.forward(ntm).crelu().pairwise_mul();
             let mut out = stm_subnet.concat(ntm_subnet);
 
-            out = out.pairwise_mul();
             out = l1.forward(out).select(buckets) + l1_fact.forward(out);
 
             let skip_neuron = out.slice_rows(15, 16);
