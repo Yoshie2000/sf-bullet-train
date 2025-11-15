@@ -1,13 +1,27 @@
 use bullet::{
-    game::{formats::sfbinpack::{TrainingDataEntry, chess::{r#move::MoveType, piecetype::PieceType}}, inputs::{self, Chess768, Factorised, Factorises, SparseInputType}, outputs::{self, OutputBuckets}}, nn::{
-        InitSettings, Shape, optimiser::{Ranger, RangerParams}
-    }, trainer::{
+    game::{
+        formats::sfbinpack::{
+            chess::{piecetype::PieceType, r#move::MoveType},
+            TrainingDataEntry,
+        },
+        inputs::SparseInputType,
+        outputs::{self, OutputBuckets},
+    },
+    nn::{
+        optimiser::{Ranger, RangerParams},
+        InitSettings, Shape,
+    },
+    trainer::{
         save::SavedFormat,
-        schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
+        schedule::{lr, wdl, TrainingSchedule, TrainingSteps},
         settings::LocalSettings,
-    }, value::{ValueTrainerBuilder, loader}
+    },
+    value::{loader, ValueTrainerBuilder},
 };
 use bulletformat::ChessBoard;
+
+use crate::threat_inputs::ThreatInputsBucketsMirrored;
+mod threat_inputs;
 
 #[derive(Clone, Copy, Default)]
 pub struct SfMaterialCount;
@@ -20,113 +34,83 @@ impl OutputBuckets<ChessBoard> for SfMaterialCount {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct SfInputs;
-impl SfInputs {
-    #[rustfmt::skip]
-    const BUCKETS: [usize; 64] = [
-        28, 29, 30, 31, 31, 30, 29, 28,
-        24, 25, 26, 27, 27, 26, 25, 24,
-        20, 21, 22, 23, 23, 22, 21, 20,
-        16, 17, 18, 19, 19, 18, 17, 16,
-        12, 13, 14, 15, 15, 14, 13, 12,
-        08, 09, 10, 11, 11, 10, 09, 08,
-        04, 05, 06, 07, 07, 06, 05, 04,
-        00, 01, 02, 03, 03, 02, 01, 00,
-    ];
-}
-
-impl SparseInputType for SfInputs {
-    type RequiredDataType = ChessBoard;
-
-    fn description(&self) -> String {
-        "".to_string()
-    }
-
-    fn is_factorised(&self) -> bool {
-        false
-    }
-
-    fn map_features<F: FnMut(usize, usize)>(&self, pos: &Self::RequiredDataType, mut f: F) {
-        
-        let make_index = |perspective, sq, pc, ksq| -> usize {
-            let flip = 56 * perspective;
-            let orientation = if ksq % 8 > 3 { 0 } else { 7 };
-            let color = usize::from(pc & 8 > 0);
-            let pctype = usize::from(pc & 7);
-            let sf_pc: usize = 2 * pctype + color ^ perspective;
-            let sf_pc = sf_pc.min(10); // no king feature on index 11
-            return (sq ^ flip ^ orientation) + 64 * sf_pc + 64 * 11 * SfInputs::BUCKETS[ksq];
-        };
-
-        for (piece, square) in pos.into_iter() {
-            let stm = make_index(0 as usize, square as usize, piece, pos.our_ksq() as usize);
-            let ntm = make_index(1 as usize, square as usize, piece, pos.opp_ksq() as usize);
-            f(stm, ntm);
-        }
-    }
-
-    fn max_active(&self) -> usize {
-        32
-    }
-
-    fn num_inputs(&self) -> usize {
-        704 * 32
-    }
-
-    fn shorthand(&self) -> String {
-        "".to_string()
-    }
-
-}
-
-impl Factorises<SfInputs> for Chess768 {
-    fn derive_feature(&self, _: &SfInputs, feat: usize) -> Option<usize> {
-        let mut feature = feat % 704;
-
-        let square = feat % 64;
-        let bucket = feat / 704;
-        let piece = feature / 64;
-        if piece == 10 && (square % 8 <= 3 || SfInputs::BUCKETS[square] != bucket) {
-            // If the feature corresponds to a king,
-            // and the king is in a different bucket or in an impossible
-            // position due to mirroring, it's the ntm king,
-            // which is encoded differently in Chess768 inputs
-            feature += 64; // effectively makes "piece" become 11
-        }
-
-        Some(feature)
-    }
-}
-
-type InputFeatures = Factorised<SfInputs, Chess768>;
-const L1: usize = 3072;
+const L1: usize = 1024;
 const L2: usize = 15;
 const L3: usize = 32;
 
+/// assumes the ThreatInputsBucketsMirrored input type, and that `weights` contains first the factoriser weights, and then the rest
+fn merge_factoriser(weights: &[f32], output_size: usize) -> Vec<f32> {
+    let factorised_end = output_size * ThreatInputsBucketsMirrored::FACTORISER_SIZE;
+    let factorised_weights = &weights[0..factorised_end];
+
+    let halfkav2_end = factorised_end + output_size * ThreatInputsBucketsMirrored::HALFKA_V2_SIZE;
+    let halfkav2_weights = &weights[factorised_end..halfkav2_end];
+
+    (0..output_size * ThreatInputsBucketsMirrored::HALFKA_V2_SIZE)
+        .map(|idx| {
+            let feature = idx / output_size;
+            let l1 = idx % output_size;
+            let factorised_feature =
+                ThreatInputsBucketsMirrored::derive_factorised_feature(feature);
+            halfkav2_weights[idx] + factorised_weights[factorised_feature * output_size + l1]
+        })
+        .collect::<Vec<f32>>()
+}
+
 fn main() {
-    let inputs = InputFeatures::from_parts(SfInputs::default(), Chess768::default());
+    let inputs = ThreatInputsBucketsMirrored::default();
 
     let output_buckets = SfMaterialCount::default();
-    let num_inputs = <InputFeatures as inputs::SparseInputType>::num_inputs(&inputs);
     const NUM_OUTPUT_BUCKETS: usize = <SfMaterialCount as outputs::OutputBuckets<_>>::BUCKETS;
 
     let saved_format = vec![
-        SavedFormat::id("l0b").round().quantise::<i16>(127),
-        SavedFormat::id("l0w").transform(move |_, weights| inputs.merge_factoriser(weights)).round().quantise::<i16>(127),
-        SavedFormat::id("pst").transform(move |_, weights| inputs.merge_factoriser(weights)).round().quantise::<i32>(600 * 16),
-        SavedFormat::id("l1b").round().quantise::<i32>(64 * 127),/*.transform(|store, weights| {
-            let fact = store.get("l1_factb").values.repeat(NUM_OUTPUT_BUCKETS);
-            weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
-        }),*/
-        SavedFormat::id("l1w").round().quantise::<i8>(64).transpose(),/*.transform(|store, weights| {
-            let fact = store.get("l1_factw").values.repeat(NUM_OUTPUT_BUCKETS);
-            weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
-        }),*/
+        SavedFormat::id("l0b").round().quantise::<i16>(255),
+        // Threat weights
+        SavedFormat::id("l0w")
+            .transform(move |_, weights| {
+                let start = L1
+                    * (ThreatInputsBucketsMirrored::FACTORISER_SIZE
+                        + ThreatInputsBucketsMirrored::HALFKA_V2_SIZE);
+                let end = start + L1 * ThreatInputsBucketsMirrored::THREATS_SIZE;
+                let threat_weights = &weights[start..end];
+
+                threat_weights
+                    .iter()
+                    .map(|w| w.clamp(-0.99, 0.99)) // with the default weight clamping of [-1.98, 1.98] and QA=255, this is required to quantise correctly
+                    .collect()
+            })
+            .round()
+            .quantise::<i8>(255),
+        // HalfKAv2 weights
+        SavedFormat::id("l0w")
+            .transform(move |_, weights| merge_factoriser(&weights, L1))
+            .round()
+            .quantise::<i16>(255),
+        SavedFormat::id("pst")
+            .transform(move |_, weights| merge_factoriser(&weights, NUM_OUTPUT_BUCKETS))
+            .round()
+            .quantise::<i32>(600 * 16),
+        SavedFormat::id("l1b").round().quantise::<i32>(64 * 127), /*.transform(|store, weights| {
+                                                                      let fact = store.get("l1_factb").values.repeat(NUM_OUTPUT_BUCKETS);
+                                                                      weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
+                                                                  }),*/
+        SavedFormat::id("l1w")
+            .round()
+            .quantise::<i8>(64)
+            .transpose(), /*.transform(|store, weights| {
+                              let fact = store.get("l1_factw").values.repeat(NUM_OUTPUT_BUCKETS);
+                              weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
+                          }),*/
         SavedFormat::id("l2b").round().quantise::<i32>(64 * 127),
-        SavedFormat::id("l2w").round().quantise::<i8>(64).transpose(),
+        SavedFormat::id("l2w")
+            .round()
+            .quantise::<i8>(64)
+            .transpose(),
         SavedFormat::id("l3b").round().quantise::<i32>(16 * 600),
-        SavedFormat::id("l3w").round().quantise::<i8>(600 * 16 / 127).transpose(),
+        SavedFormat::id("l3w")
+            .round()
+            .quantise::<i8>(600 * 16 / 127)
+            .transpose(),
     ];
 
     let mut trainer = ValueTrainerBuilder::default()
@@ -138,14 +122,18 @@ fn main() {
         .save_format(saved_format.as_slice())
         .build(|builder, stm, ntm, buckets| {
             // trainable weights
-            let l0 = builder.new_affine("l0", num_inputs, L1);
+            let l0 = builder.new_affine("l0", inputs.num_inputs(), L1);
             let l1 = builder.new_affine("l1", L1, NUM_OUTPUT_BUCKETS * (L2 + 1));
             // let l1_fact = builder.new_affine("l1_fact", L1, L2 + 1);
             let l2 = builder.new_affine("l2", L2 * 2, NUM_OUTPUT_BUCKETS * L3);
             let l3 = builder.new_affine("l3", L3, NUM_OUTPUT_BUCKETS);
             let pst = builder.new_weights(
                 "pst",
-                Shape::new(NUM_OUTPUT_BUCKETS, num_inputs),
+                Shape::new(
+                    NUM_OUTPUT_BUCKETS,
+                    ThreatInputsBucketsMirrored::FACTORISER_SIZE
+                        + ThreatInputsBucketsMirrored::HALFKA_V2_SIZE,
+                ),
                 InitSettings::Zeroed,
             );
 
@@ -154,7 +142,7 @@ fn main() {
             let ntm_subnet = l0.forward(ntm).crelu().pairwise_mul();
             let mut out = stm_subnet.concat(ntm_subnet);
 
-            out = l1.forward(out).select(buckets);// + l1_fact.forward(out);
+            out = l1.forward(out).select(buckets); // + l1_fact.forward(out);
 
             let skip_neuron = out.slice_rows(15, 16);
             out = out.slice_rows(0, 15);
@@ -165,19 +153,24 @@ fn main() {
             out = l2.forward(out).select(buckets).crelu();
             out = l3.forward(out).select(buckets);
 
-            let stm_pst = pst.matmul(stm).select(buckets);
-            let ntm_pst = pst.matmul(ntm).select(buckets);
+            let pst_slice_end = ThreatInputsBucketsMirrored::FACTORISER_SIZE
+                + ThreatInputsBucketsMirrored::HALFKA_V2_SIZE;
+            let stm_pst = pst.matmul(stm.slice_rows(0, pst_slice_end)).select(buckets);
+            let ntm_pst = pst.matmul(ntm.slice_rows(0, pst_slice_end)).select(buckets);
             let pst_out = stm_pst.linear_comb(0.5, ntm_pst, -0.5);
             out = out + skip_neuron + pst_out;
 
             out
         });
-    
-    trainer.optimiser.set_params_for_weight("l3w", RangerParams {
-        min_weight: -1.68,
-        max_weight: 1.68,
-        ..Default::default()
-    });
+
+    trainer.optimiser.set_params_for_weight(
+        "l3w",
+        RangerParams {
+            min_weight: -1.68,
+            max_weight: 1.68,
+            ..Default::default()
+        },
+    );
 
     println!("Params: {}", trainer.optimiser.graph.get_num_params());
 
@@ -224,8 +217,10 @@ fn main() {
     trainer.run(&schedule, &settings, &data_loader);
     // trainer.load_from_checkpoint("checkpoints/test-1");
     //trainer.report_profiles();
-    let eval = 600.0 * trainer.eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 0.0");
+    let eval =
+        600.0 * trainer.eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 0.0");
     println!("Eval: {eval:.3}cp");
-    let eval = 600.0 * trainer.eval("r1bq1rk1/ppppbppp/3n4/4R3/8/8/PPPP1PPP/RNBQ1BK1 w - - 1 9 | 0 | 0.0");
+    let eval =
+        600.0 * trainer.eval("r1bq1rk1/ppppbppp/3n4/4R3/8/8/PPPP1PPP/RNBQ1BK1 w - - 1 9 | 0 | 0.0");
     println!("Eval: {eval:.3}cp");
 }
