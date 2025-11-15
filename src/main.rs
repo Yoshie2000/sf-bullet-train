@@ -99,13 +99,13 @@ impl Factorises<SfInputs> for Chess768 {
     }
 }
 
-type InputFeatures = SfInputs;
+type InputFeatures = Factorised<SfInputs, Chess768>;
 const L1: usize = 3072;
 const L2: usize = 15;
 const L3: usize = 32;
 
 fn main() {
-    let inputs = SfInputs::default();//InputFeatures::from_parts(SfInputs::default(), Chess768::default());
+    let inputs = InputFeatures::from_parts(SfInputs::default(), Chess768::default());
 
     let output_buckets = SfMaterialCount::default();
     let num_inputs = <InputFeatures as inputs::SparseInputType>::num_inputs(&inputs);
@@ -113,8 +113,8 @@ fn main() {
 
     let saved_format = vec![
         SavedFormat::id("l0b").round().quantise::<i16>(127),
-        SavedFormat::id("l0w").round().quantise::<i16>(127),
-        SavedFormat::id("pst").round().quantise::<i32>(600 * 16),
+        SavedFormat::id("l0w").transform(move |_, weights| inputs.merge_factoriser(weights)).round().quantise::<i16>(127),
+        SavedFormat::id("pst").transform(move |_, weights| inputs.merge_factoriser(weights)).round().quantise::<i32>(600 * 16),
         SavedFormat::id("l1b").round().quantise::<i32>(64 * 127),/*.transform(|store, weights| {
             let fact = store.get("l1_factb").values.repeat(NUM_OUTPUT_BUCKETS);
             weights.into_iter().zip(fact).map(|(a, b)| a + b).collect()
@@ -215,11 +215,11 @@ fn main() {
         loader::SfBinpackLoader::new(file_path, buffer_size_mb, threads, filter)
     };
     //trainer.profile_all_nodes();
-    // trainer.run(&schedule, &settings, &data_loader);
-    trainer.load_from_checkpoint("checkpoints/test-1");
+    trainer.run(&schedule, &settings, &data_loader);
+    // trainer.load_from_checkpoint("checkpoints/test-1");
     //trainer.report_profiles();
-    let eval = 400.0 * trainer.eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 0.0");
+    let eval = 600.0 * trainer.eval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 0.0");
     println!("Eval: {eval:.3}cp");
-    let eval = 400.0 * trainer.eval("r1bq1rk1/ppppbppp/3n4/4R3/8/8/PPPP1PPP/RNBQ1BK1 w - - 1 9 | 0 | 0.0");
+    let eval = 600.0 * trainer.eval("r1bq1rk1/ppppbppp/3n4/4R3/8/8/PPPP1PPP/RNBQ1BK1 w - - 1 9 | 0 | 0.0");
     println!("Eval: {eval:.3}cp");
 }
