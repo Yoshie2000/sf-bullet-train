@@ -1,6 +1,6 @@
 use bullet::{
     game::{formats::sfbinpack::{TrainingDataEntry, chess::{r#move::MoveType, piecetype::PieceType}}, inputs::{self, Chess768, Factorised, Factorises, SparseInputType}, outputs::{self, OutputBuckets}}, nn::{
-        InitSettings, Shape, optimiser::Ranger
+        InitSettings, Shape, optimiser::{Ranger, RangerParams}
     }, trainer::{
         save::SavedFormat,
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
@@ -172,6 +172,12 @@ fn main() {
 
             out
         });
+    
+    trainer.optimiser.set_params_for_weight("l3w", RangerParams {
+        min_weight: -1.68,
+        max_weight: 1.68,
+        ..Default::default()
+    });
 
     println!("Params: {}", trainer.optimiser.graph.get_num_params());
 
